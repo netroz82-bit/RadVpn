@@ -963,6 +963,74 @@ class MainViewModel(
         }
     }
 
+        // ---------- RadVpn auto connect ----------
+    private val radvpnSubUrls = listOf(
+        "PUT_LIST_LINK_1_HERE",
+        "PUT_LIST_LINK_2_HERE",
+    )
+    private var autoStarted = false
+    val autoConnectEvents = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+    fun autoConnect() {
+        if (autoStarted) return
+        autoStarted = true
+        viewModelScope.launch(ioDispatcher) {
+            try {
+                initialPageReady.await()
+                delay(1500)
+                if (uiState.value.isRunning) return@launch
+
+                val existing = dataSource.getSubscriptions().map { it.subscription.url }.toSet()
+                radvpnSubUrls.filter { it.startsWith("http") && it !in existing }
+                    .forEachIndexed { i, url ->
+                        com.v2ray.ang.handler.MmkvManager.encodeSubscription(
+                            "",
+                            com.v2ray.ang.dto.entities.SubscriptionItem(remarks = "RadVpn ${i + 1}", url = url)
+                        )
+                    }
+
+                toast("RadVpn: در حال دریافت لیست سرورها...")
+                dataSource.updateConfigViaSubAll()
+                setupGroupTab(forceRefresh = true).join()
+
+                toast("RadVpn: در حال تست سرورها...")
+                val good = mutableListOf<ServersCache>()
+                for (group in uiState.value.groups) {
+                    val servers = loadGroup(group.id, forceRefresh = true)
+                    if (servers.isEmpty()) continue
+                    updateGroupUi(group.id, servers)
+                    dataSource.setSelectedSubscriptionId(group.id)
+                    _uiState.update { it.copy(selectedGroupId = group.id) }
+                    testAllRealPing()
+                    val startedAt = System.currentTimeMillis()
+                    while (true) {
+                        delay(1000)
+                        val enough = mutableServerGroupState(group.id).value.servers
+                            .count { it.testDelayMillis > 0L } >= 8
+                        val timedOut = System.currentTimeMillis() - startedAt > 90_000L
+                        if (enough || timedOut || !uiState.value.isTesting) break
+                    }
+                    cancelAllPing()
+                    good += mutableServerGroupState(group.id).value.servers
+                        .filter { it.testDelayMillis > 0L }
+                    if (good.size >= 8) break
+                }
+
+                val best = good.minByOrNull { it.testDelayMillis }
+                if (best == null) {
+                    toast("RadVpn: هیچ سرور سالمی پیدا نشد")
+                    return@launch
+                }
+                updateSelectedGuid(best.guid)
+                triggerLocateSelectedServer()
+                autoConnectEvents.tryEmit(Unit)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: Exception) {
+                LogUtil.e(AppConfig.TAG, "RadVpn auto connect failed", e)
+            }
+        }
+    }
     private companion object {
         const val TEST_RESULT_FLUSH_INTERVAL_MS = 500L
     }
