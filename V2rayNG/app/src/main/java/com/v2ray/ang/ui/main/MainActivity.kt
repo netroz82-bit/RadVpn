@@ -94,6 +94,12 @@ class MainActivity : HelperBaseComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         mainViewModel.onAction(MainAction.Initialize)
+                mainViewModel.autoConnect()
+        lifecycleScope.launch {
+            mainViewModel.autoConnectEvents.collect {
+                LauncherManager.restartServiceOrStart(this@MainActivity, this@MainActivity::requestServiceStart)
+            }
+        }
 
         checkAndRequestPermission(PermissionType.POST_NOTIFICATIONS) {}
     }
