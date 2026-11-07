@@ -996,7 +996,8 @@ class MainViewModel(
                     }
 
                 toast("RadVpn: در حال دریافت لیست سرورها...")
-                dataSource.updateConfigViaSubAll()
+                                val r = dataSource.updateConfigViaSubAll()
+                toast("RadVpn: ${r.configCount} سرور از ${r.successCount} لیست")
                 setupGroupTab(forceRefresh = true).join()
 
                 toast("RadVpn: در حال تست سرورها...")
