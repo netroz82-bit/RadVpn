@@ -965,7 +965,14 @@ class MainViewModel(
 
         // ---------- RadVpn auto connect ----------
     private val radvpnSubUrls = listOf(
-    
+            "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/lite.txt",
+        "https://raw.githubusercontent.com/Delta-Kronecker/V2ray-Config/refs/heads/main/config/tcp-pass/batch_013.txt",
+        "https://raw.githubusercontent.com/coldwater-10/V2ray-Config/main/Sub7.txt",
+        "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/iran.txt",
+        "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt",
+        "https://cdn.jsdelivr.net/gh/morpheusadam/v2ray-config@main/subs/bundles/lite.txt",
+        "https://cdn.jsdelivr.net/gh/morpheusadam/v2ray-config@main/subs/bundles/iran.txt",
+        "https://raw.githack.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt",
     )
     private var autoStarted = false
     val autoConnectEvents = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1)
