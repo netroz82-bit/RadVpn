@@ -962,7 +962,176 @@ class MainViewModel(
             throw IllegalArgumentException("Unknown ViewModel class")
         }
     }
+    // ---------- RadVpn smart connect (speed based) ----------
+    private var radvpnStarted = false
+    private var radvpnWatchJob: Job? = null
+    private val radvpnMinMbps = 1.0
 
+    fun radvpnRun() {
+        if (radvpnStarted) return
+        radvpnStarted = true
+        viewModelScope.launch(ioDispatcher) {
+            try {
+                initialPageReady.await()
+                delay(1500)
+                if (uiState.value.isRunning) return@launch
+                val lastGuid = com.v2ray.ang.handler.MmkvManager.decodeSettingsString("radvpn_last_good")
+                val lastProfile = if (lastGuid.isNullOrEmpty()) null else dataSource.decodeServerConfig(lastGuid)
+                if (lastGuid != null && lastProfile != null) {
+                    toast("RadVpn: اتصال به آخرین سرور خوب...")
+                    val last = ServersCache(guid = lastGuid, profile = lastProfile.copy(), testDelayMillis = 0L)
+                    radvpnSwitchTo(last)
+                    val mbps = if (uiState.value.isRunning) radvpnSpeedMbps() else 0.0
+                    if (mbps >= radvpnMinMbps) {
+                        toast("RadVpn: وصل شد (${"%.1f".format(mbps)} Mbps)")
+                        radvpnStartWatchdog(emptyList(), last)
+                        return@launch
+                    }
+                }
+                radvpnFullSearch()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: Exception) {
+                LogUtil.e(AppConfig.TAG, "RadVpn run failed", e)
+            }
+        }
+    }
+
+    private suspend fun radvpnFullSearch() {
+        val existing = dataSource.getSubscriptions().map { it.subscription.url }.toSet()
+        radvpnSubUrls.filter { it.startsWith("http") && it !in existing }
+            .forEachIndexed { i, url ->
+                com.v2ray.ang.handler.MmkvManager.encodeSubscription(
+                    "",
+                    com.v2ray.ang.dto.entities.SubscriptionItem(remarks = "RadVpn ${i + 1}", url = url)
+                )
+            }
+        toast("RadVpn: در حال دریافت لیست سرورها...")
+        val r = dataSource.updateConfigViaSubAll()
+        toast("RadVpn: ${r.configCount} سرور از ${r.successCount} لیست")
+        setupGroupTab(forceRefresh = true).join()
+        toast("RadVpn: در حال تست سرورها...")
+        val ok = { s: ServersCache ->
+            s.testDelayMillis > 0L && s.profile.insecure != true &&
+                (s.profile.security == "tls" || s.profile.security == "reality")
+        }
+        val good = mutableListOf<ServersCache>()
+        for (group in uiState.value.groups) {
+            val servers = loadGroup(group.id, forceRefresh = true)
+            if (servers.isEmpty()) continue
+            updateGroupUi(group.id, servers)
+            dataSource.setSelectedSubscriptionId(group.id)
+            _uiState.update { it.copy(selectedGroupId = group.id) }
+            testAllRealPing()
+            val startedAt = System.currentTimeMillis()
+            while (true) {
+                delay(1000)
+                val enough = mutableServerGroupState(group.id).value.servers.count(ok) >= 10
+                val timedOut = System.currentTimeMillis() - startedAt > 90_000L
+                if (enough || timedOut || !uiState.value.isTesting) break
+            }
+            cancelAllPing()
+            good += mutableServerGroupState(group.id).value.servers.filter(ok)
+            if (good.size >= 10) break
+        }
+        radvpnSmartConnect(good.sortedBy { it.testDelayMillis }.take(10))
+    }
+
+    private suspend fun radvpnSmartConnect(candidates: List<ServersCache>) {
+        if (candidates.isEmpty()) {
+            toast("RadVpn: هیچ سرور سالمی پیدا نشد")
+            return
+        }
+        val results = mutableListOf<Pair<ServersCache, Double>>()
+        for ((index, s) in candidates.withIndex()) {
+            toast("RadVpn: تست سرعت ${index + 1} از ${candidates.size}")
+            radvpnSwitchTo(s)
+            val mbps = if (uiState.value.isRunning) radvpnSpeedMbps() else 0.0
+            results += s to mbps
+            if (mbps >= radvpnMinMbps) {
+                radvpnRemember(s)
+                toast("RadVpn: وصل شد (${"%.1f".format(mbps)} Mbps)")
+                radvpnStartWatchdog(candidates, s)
+                return
+            }
+        }
+        val best = results.maxByOrNull { it.second }
+        if (best == null || best.second <= 0.0) {
+            toast("RadVpn: سرور سریعی پیدا نشد")
+            return
+        }
+        if (uiState.value.selectedGuid != best.first.guid) radvpnSwitchTo(best.first)
+        radvpnRemember(best.first)
+        toast("RadVpn: بهترین سرور موجود (${"%.1f".format(best.second)} Mbps)")
+        radvpnStartWatchdog(candidates, best.first)
+    }
+
+    private suspend fun radvpnSwitchTo(s: ServersCache) {
+        updateSelectedGuid(s.guid)
+        autoConnectEvents.tryEmit(Unit)
+        delay(6000)
+        var waited = 0
+        while (!uiState.value.isRunning && waited < 20) {
+            delay(1000)
+            waited++
+        }
+        delay(2500)
+    }
+
+    private fun radvpnRemember(s: ServersCache) {
+        com.v2ray.ang.handler.MmkvManager.encodeSettings("radvpn_last_good", s.guid)
+    }
+
+    private fun radvpnStartWatchdog(candidates: List<ServersCache>, current: ServersCache) {
+        radvpnWatchJob?.cancel()
+        radvpnWatchJob = viewModelScope.launch(ioDispatcher) {
+            var fails = 0
+            while (true) {
+                delay(45_000)
+                if (uiState.value.selectedGuid != current.guid) return@launch
+                if (!uiState.value.isRunning) {
+                    fails = 0
+                    continue
+                }
+                val mbps = radvpnSpeedMbps(bytes = 400_000, limitMs = 8_000L)
+                fails = if (mbps < 0.3) fails + 1 else 0
+                if (fails >= 2) {
+                    toast("RadVpn: سرور کند شد، در حال تعویض...")
+                    val rest = candidates.filter { it.guid != current.guid }
+                    if (rest.isEmpty()) radvpnFullSearch() else radvpnSmartConnect(rest)
+                    return@launch
+                }
+            }
+        }
+    }
+
+    private fun radvpnSpeedMbps(bytes: Int = 1_500_000, limitMs: Long = 9_000L): Double {
+        var conn: java.net.HttpURLConnection? = null
+        return try {
+            val proxy = java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", 10809))
+            val c = java.net.URL("https://speed.cloudflare.com/__down?bytes=$bytes").openConnection(proxy) as java.net.HttpURLConnection
+            conn = c
+            c.connectTimeout = 7000
+            c.readTimeout = 7000
+            val buf = ByteArray(16 * 1024)
+            var total = 0L
+            val start = System.nanoTime()
+            c.inputStream.use { input ->
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    total += n
+                    if ((System.nanoTime() - start) / 1_000_000 > limitMs) break
+                }
+            }
+            val secs = (System.nanoTime() - start) / 1e9
+            if (total < 50_000 || secs <= 0.0) 0.0 else total * 8.0 / 1e6 / secs
+        } catch (e: Exception) {
+            0.0
+        } finally {
+            conn?.disconnect()
+        }
+    }
         // ---------- RadVpn auto connect ----------
     private val radvpnSubUrls = listOf(
             "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/lite.txt",
