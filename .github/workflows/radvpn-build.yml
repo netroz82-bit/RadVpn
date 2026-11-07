@@ -39,7 +39,7 @@ jobs:
           cd AndroidLibXrayLite
           gomobile init
           go mod tidy -v
-          gomobile bind -v -androidapi 24 -trimpath -ldflags='-s -w -buildid=' -o libv2ray.aar ./
+          gomobile bind -v -androidapi 24 -trimpath -ldflags='-s -w -buildid= -checklinkname=0' -o libv2ray.aar ./
           mkdir -p ../V2rayNG/app/libs
           cp libv2ray.aar ../V2rayNG/app/libs/
 
