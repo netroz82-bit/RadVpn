@@ -965,8 +965,7 @@ class MainViewModel(
 
         // ---------- RadVpn auto connect ----------
     private val radvpnSubUrls = listOf(
-        "PUT_LIST_LINK_1_HERE",
-        "PUT_LIST_LINK_2_HERE",
+    
     )
     private var autoStarted = false
     val autoConnectEvents = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1)
