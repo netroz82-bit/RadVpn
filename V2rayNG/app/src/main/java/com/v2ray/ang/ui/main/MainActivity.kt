@@ -94,7 +94,7 @@ class MainActivity : HelperBaseComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         mainViewModel.onAction(MainAction.Initialize)
-                mainViewModel.autoConnect()
+                        mainViewModel.radvpnRun()
         lifecycleScope.launch {
             mainViewModel.autoConnectEvents.collect {
                 LauncherManager.restartServiceOrStart(this@MainActivity, this@MainActivity::requestServiceStart)
